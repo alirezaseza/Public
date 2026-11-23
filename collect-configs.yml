@@ -1,0 +1,22 @@
+name: Collect configs
+on:
+  schedule: [{ cron: "*/30 * * * *" }]   # every 30 minutes
+  workflow_dispatch: {}                   # manual "Run workflow" button
+concurrency:
+  group: collect-configs
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/collect_configs.py --channels channels.txt -o sub/all.txt --max-age 25
+      - name: Commit if changed
+        run: |
+          git config user.name github-actions
+          git config user.email actions@github.com
+          git add sub
+          git diff --cached --quiet || (git commit -m "Update configs (last 25h)" && git pull --rebase -q && git push)
