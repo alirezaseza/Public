@@ -1,6 +1,7 @@
 name: Collect configs
 on:
-  schedule: [{ cron: "*/30 * * * *" }]   # every 30 minutes
+  schedule:
+    - cron: "7,37 * * * *"   # every 30 min, off the busy :00/:30 marks
   workflow_dispatch: {}                   # manual "Run workflow" button
 concurrency:
   group: collect-configs
