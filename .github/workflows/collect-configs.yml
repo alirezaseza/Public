@@ -20,4 +20,14 @@ jobs:
           git config user.name github-actions
           git config user.email actions@github.com
           git add sub
-          git diff --cached --quiet || (git commit -m "Update configs (last 25h)" && git pull --rebase -q && git push)
+          if git diff --cached --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git commit -m "Update configs (last 25h)"
+          for i in 1 2 3; do
+            git pull --rebase -X theirs -q && git push && exit 0
+            git rebase --abort 2>/dev/null || true
+            sleep 5
+          done
+          exit 1
