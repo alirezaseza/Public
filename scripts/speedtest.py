@@ -23,7 +23,10 @@ from validate_subscription import b64decode
 
 BASE_PORT = 21000
 LAT_URL = "https://www.gstatic.com/generate_204"
-DL_URL = "https://speed.cloudflare.com/__down?bytes=1000000"
+DL_URLS = ["https://speed.cloudflare.com/__down?bytes=1000000",
+           "https://cachefly.cachefly.net/1mb.test",
+           "https://proof.ovh.net/files/1Mb.dat"]
+_ERR = {}
 
 
 # ---------------------------------------------------------------- link -> sing-box outbound
@@ -200,21 +203,23 @@ def _latency(port, timeout=6):
 
 
 def _speed(port, deadline=6):
-    """Mbit/s of a 1 MB download; the clock starts once the response headers are in (handshakes not counted)."""
-    got, t = 0, None
-    try:
-        with _opener(port).open(urllib.request.Request(DL_URL), timeout=8) as r:
-            t = time.time()
-            while time.time() - t < deadline:
-                b = r.read(65536)
-                if not b:
-                    break
-                got += len(b)
-    except Exception:
-        pass
-    if not got or t is None:
-        return 0.0
-    return got * 8 / 1e6 / max(time.time() - t, 0.05)
+    """Mbit/s of a small download; tries several hosts; the clock starts once the headers are in."""
+    for url in DL_URLS:
+        got, t = 0, None
+        try:
+            with _opener(port).open(urllib.request.Request(url), timeout=8) as r:
+                t = time.time()
+                while time.time() - t < deadline:
+                    b = r.read(65536)
+                    if not b:
+                        break
+                    got += len(b)
+        except Exception as e:
+            k = repr(e)[:70]
+            _ERR[k] = _ERR.get(k, 0) + 1
+        if got and t is not None:
+            return got * 8 / 1e6 / max(time.time() - t, 0.05)
+    return 0.0
 
 
 def _run(binary, items, max_ms, min_mbps):
@@ -241,6 +246,9 @@ def _run(binary, items, max_ms, min_mbps):
         ok = [i for i, ms in enumerate(lat) if ms is not None and ms <= max_ms]
         with ThreadPoolExecutor(8) as ex:          # limited so the tests do not steal each other's bandwidth
             sp = list(ex.map(lambda i: _speed(ports[i]), ok))
+        if _ERR:
+            print('  speed errors:', sorted(_ERR.items(), key=lambda x: -x[1])[:4])
+        print(f'  batch: {len(items)} started, {len(ok)} latency ok, {sum(1 for s in sp if s > 0)} got data')
         return [(s, lat[i], items[i][0]) for i, s in zip(ok, sp) if s >= min_mbps]
     finally:
         proc.terminate()
