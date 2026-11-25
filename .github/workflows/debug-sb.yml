@@ -3,39 +3,34 @@ on: workflow_dispatch
 jobs:
   t:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        ver: ["latest", "1.12"]
     steps:
+      - uses: actions/checkout@v4
       - name: Install
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          if [ "${{ matrix.ver }}" = latest ]; then
-            API=https://api.github.com/repos/SagerNet/sing-box/releases/latest
-            JQ='.assets[]'
-          else
-            API="https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100"
-            JQ='[.[] | select(.prerelease==false) | select(.tag_name|startswith("v${{ matrix.ver }}"))][0].assets[]'
-          fi
-          URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$API" | jq -r "$JQ | select(.name|test(\"linux-amd64\\\\.tar\\\\.gz$\")) | select(.name|test(\"legacy|musl|glibc\")|not) | .browser_download_url" | head -1)
-          echo "URL=$URL"
+          URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r '.assets[] | select(.name|test("linux-amd64\\.tar\\.gz$")) | select(.name|test("legacy|musl|glibc")|not) | .browser_download_url' | head -1)
           curl -fsSL "$URL" -o sb.tgz && tar -xzf sb.tgz
           sudo install -m755 sing-box-*/sing-box /usr/local/bin/sing-box
           sing-box version | head -1
-      - name: Test direct through mixed inbound
+      - name: Real links start test
         run: |
-          cat > c.json <<'J'
-          {"log":{"level":"debug"},
-           "inbounds":[{"type":"mixed","tag":"in0","listen":"127.0.0.1","listen_port":20000}],
-           "outbounds":[{"type":"direct","tag":"out0"},{"type":"direct","tag":"direct"}],
-           "route":{"rules":[{"inbound":["in0"],"outbound":"out0"}],"final":"direct"}}
-          J
-          sing-box check -c c.json && echo CHECK_OK
-          sing-box run -c c.json > sb.log 2>&1 &
-          sleep 3
-          echo "--- latency"; curl -sS -o /dev/null -w "%{http_code} %{time_total}s\n" -x http://127.0.0.1:20000 --max-time 8 https://www.gstatic.com/generate_204 || true
-          echo "--- download"; curl -sS -o /dev/null -w "%{http_code} %{size_download}B %{time_total}s\n" -x http://127.0.0.1:20000 --max-time 10 "https://speed.cloudflare.com/__down?bytes=1000000" || true
-          echo "--- sing-box log"; tail -30 sb.log
+          python3 - <<'PY'
+          import sys, json
+          sys.path.insert(0, "scripts")
+          import speedtest as s
+          links = [l.strip() for l in open("sub/all.txt") if "://" in l][:300]
+          outs = [(l, s.to_outbound(l)) for l in links]
+          outs = [(l, o) for l, o in outs if o][:8]
+          print("converted", len(outs))
+          seen = set()
+          for l, o in outs:
+              p, err = s._start("sing-box", [o])
+              if p:
+                  print("START OK:", l[:30], o.get("type"), o.get("server")); p.terminate()
+              else:
+                  e = err.strip().splitlines()[-1][:300] if err.strip() else "(no stderr)"
+                  print("START FAIL:", l[:30], o.get("type"), "|", e)
+          print("sample outbound:", json.dumps(outs[0][1])[:400])
+          PY
