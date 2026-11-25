@@ -11,10 +11,22 @@ permissions:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - run: python3 scripts/collect_configs.py --channels channels.txt -o sub/all.txt --max-age 25
+      - name: Install sing-box
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SagerNet/sing-box/releases/latest \
+            | jq -r '.assets[] | select(.name | test("linux-amd64\\.tar\\.gz$")) | select(.name | test("legacy|musl|glibc") | not) | .browser_download_url' | head -1)
+          echo "downloading $URL"
+          curl -fsSL "$URL" -o sb.tgz
+          tar -xzf sb.tgz
+          sudo install -m755 sing-box-*/sing-box /usr/local/bin/sing-box
+          sing-box version | head -1
+      - run: python3 scripts/collect_configs.py --channels channels.txt -o sub/all.txt --max-age 25 --speed-budget 900
       - name: Commit if changed
         run: |
           git config user.name github-actions
