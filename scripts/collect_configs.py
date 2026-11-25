@@ -3,9 +3,10 @@
 
 Runs inside GitHub Actions (no bot, no server). Stateless: every run rebuilds the file from scratch,
 so anything posted more than --max-age hours ago (default 25) disappears automatically.
+Pipeline: scrape -> validate/dedup -> TCP ping -> real speed test through sing-box -> fastest first.
 
 Usage: collect_configs.py [--channels channels.txt] [-o sub/all.txt] [--max-age 25]
-Standard library only.
+Standard library only (the speed test needs the sing-box binary; without it that step is skipped).
 """
 import argparse
 import html
@@ -23,6 +24,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from validate_subscription import b64decode, check  # same rules the app uses: drops links it cannot run
+import speedtest
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
 LINK_RE = re.compile(r"(?<![A-Za-z0-9])(?:vless|vmess|trojan|ss)://[^\s<>\"'`]+", re.I)
@@ -156,8 +158,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--channels", default="channels.txt")
     ap.add_argument("-o", "--output", default="sub/all.txt")
-    ap.add_argument("--max", type=int, default=3000, help="keep at most N links (newest first), 0 = all")
+    ap.add_argument("--max", type=int, default=3000, help="keep at most N links (fastest first), 0 = all")
     ap.add_argument("--no-ping", action="store_true", help="skip the quick TCP reachability test")
+    ap.add_argument("--no-speed", action="store_true", help="skip the sing-box speed test")
+    ap.add_argument("--min-mbps", type=float, default=0.5, help="speed test: minimum Mbit/s")
+    ap.add_argument("--max-ms", type=int, default=4000, help="speed test: maximum latency in ms")
+    ap.add_argument("--speed-budget", type=int, default=2400, help="speed test: time limit in seconds")
     ap.add_argument("--max-age", type=float, default=25.0, help="hours")
     a = ap.parse_args()
 
@@ -182,7 +188,7 @@ def main():
         print(f"::warning::{unreachable}/{len(names)} channels unreachable - file left as is")
         sys.exit(0)
 
-    rows.sort(key=lambda x: -x[0])                     # newest first
+    rows.sort(key=lambda x: -x[0])                     # newest first (stable: same-message links keep their order)
     seen, kept, dropped = set(), [], 0
     for _, link in rows:
         key, _why = check(link)
@@ -193,7 +199,13 @@ def main():
         kept.append(link)
     print(f"total {len(rows)} links, kept {len(kept)}, dropped {dropped}")
     if kept and not a.no_ping:
-        kept = ping_filter(kept)
+        kept = ping_filter(kept)                       # keeps the order (newest first)
+    if kept and not a.no_speed:
+        fast = speedtest.filter_links(kept, a.min_mbps, a.max_ms, a.speed_budget)   # sorted by download speed, fastest first
+        if fast:
+            kept = fast
+        else:                                          # zero passes = broken runner network or missing sing-box, not 3000 dead servers
+            print("::warning::speed test passed nothing - result ignored")
     if a.max:
         kept = kept[: a.max]
 
